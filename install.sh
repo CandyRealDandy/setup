@@ -94,7 +94,9 @@ install_gh() {
         script=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh) &&
           bash -c "$script" <&3 && brew_env
       } || return 1
-      brew install gh ;;
+      # No `brew cleanup` afterwards: it would delete the old versions of
+      # anything the install upgrades, the way back.
+      HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ENV_HINTS=1 brew install gh ;;
     Linux) install_gh_linux ;;
     MINGW* | MSYS* | CYGWIN*) fail "on Windows, run install.ps1 in PowerShell"; return 2 ;;
     *) fail "$kernel isn't supported"; return 2 ;;
