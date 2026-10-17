@@ -27,6 +27,30 @@ as_root() {
   fi
 }
 
+# ask <question>: yes on Enter or y, or with --yes; no on n or without a terminal.
+ask() {
+  local reply
+  printf '%s [Y/n] ' "$1" >&2
+  if [[ -n ${YES:-} ]]; then say "yes (--yes)"; return 0; fi
+  read -r reply <&3 || { say; return 1; }
+  [[ -z $reply || $reply == [yY]* ]]
+}
+
+# xcode_license: a Mac with the full Xcode app blocks git, Homebrew and gh
+# until Xcode's license is accepted; accepting is the user's agreement, so
+# it's asked for (with the password sudo needs), then done here.
+xcode_license() {
+  [[ $(uname -s) == Darwin && $(xcode-select -p 2>/dev/null) == *Xcode*.app* ]] || return 0
+  xcodebuild -license check >/dev/null 2>&1 && return 0
+  say "Xcode's license isn't accepted yet, and macOS blocks git (and Homebrew) until it is."
+  if ask "Accept it now? (runs sudo xcodebuild -license accept; it asks your password)"; then
+    as_root xcodebuild -license accept <&3 && return 0
+    fail "accepting Xcode's license failed"; return 1
+  fi
+  fail "macOS blocks git until Xcode's license is accepted: run sudo xcodebuild -license (read it, type agree), then run this again"
+  return 1
+}
+
 brew_env() {
   local brew
   for brew in /opt/homebrew/bin/brew /usr/local/bin/brew; do
@@ -66,19 +90,11 @@ install_gh() {
 main() {
   local login previous script status
   { exec 3<"$TTY"; } 2>/dev/null || { exec 3</dev/null; NO_TERMINAL=1; }
-  # macOS: with the full Xcode app, its license gates git, Homebrew and gh.
-  if [[ $(uname -s) == Darwin && $(xcode-select -p 2>/dev/null) == *Xcode*.app* ]] &&
-    ! xcodebuild -license check >/dev/null 2>&1; then
-    fail "Xcode's license isn't accepted yet, and macOS blocks git until it is: run sudo xcodebuild -license (read it, type agree), then run this again"
-    return 1
-  fi
+  [[ " $* " == *" --yes "* ]] && YES=1
+  xcode_license || return 1
   if ! command -v gh >/dev/null 2>&1; then
     say "gh (GitHub's command line tool) is needed to get the private setup."
-    printf 'Install it now? [Y/n] ' >&2
-    if [[ " $* " == *" --yes "* ]]; then say "yes (--yes)"
-    elif ! { read -r reply <&3 && [[ -z $reply || $reply == [yY]* ]]; }; then
-      say; fail "gh is needed to get the private setup; nothing installed"; return 1
-    fi
+    ask "Install it now?" || { fail "gh is needed to get the private setup; nothing installed"; return 1; }
     install_gh
     status=$?
     ((status == 2)) && return 1
