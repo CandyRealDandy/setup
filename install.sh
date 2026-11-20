@@ -59,10 +59,21 @@ gh_login() {
 }
 
 # gh_back <account>: gh back to the account that was active (e.g. work, on a
-# work machine).
+# work machine), after a login made the owner the active one.
 gh_back() {
   [[ -n $1 && $1 != "$OWNER" ]] || return 0
   gh auth switch --hostname github.com --user "$1" >/dev/null 2>&1
+}
+
+# fetch_setup: the private setup in SCRIPT, fetched with the owner's own token
+# (gh auth token --user), never by switching gh's active account, which another
+# program (a work session, say) may be using meanwhile. Fails with no login for
+# the owner, or one that no longer works.
+fetch_setup() {
+  local token
+  token=$(gh auth token --hostname github.com --user "$OWNER" 2>/dev/null) && [[ -n $token ]] &&
+    SCRIPT=$(GH_TOKEN=$token gh api "$PRIVATE" -H 'Accept: application/vnd.github.raw' 2>/dev/null) &&
+    [[ -n $SCRIPT ]]
 }
 
 brew_env() {
@@ -104,7 +115,7 @@ install_gh() {
 }
 
 main() {
-  local login previous script status
+  local login previous status
   { exec 3<"$TTY"; } 2>/dev/null || { exec 3</dev/null; NO_TERMINAL=1; }
   [[ " $* " == *" --yes "* ]] && YES=1
   xcode_license || return 1
@@ -116,37 +127,29 @@ main() {
     ((status == 2)) && return 1
     ((status == 0)) || { fail "installing gh failed"; return 1; }
   fi
-  login=$(gh_login)
-  previous=$login
-  if [[ -n $login && $login != "$OWNER" ]] &&
-    gh auth switch --hostname github.com --user "$OWNER" >/dev/null 2>&1; then
-    login=$(gh_login)
-  fi
-  # Not logged in as the owner, or the owner's saved login no longer works.
-  if [[ $login != "$OWNER" ]]; then
+  # No login for the owner, or its saved login no longer works: log in. The login
+  # makes the owner gh's active account, so the one that was active is switched
+  # back to straight after.
+  if ! fetch_setup; then
     if [[ -n ${NO_TERMINAL:-} ]]; then
       fail "logging in to GitHub needs a terminal: run this in a terminal window"; return 1
     fi
+    previous=$(gh_login)
     say "Log in to GitHub as $OWNER: gh opens the browser."
     local skip=""  # the setup uploads the SSH key itself
     gh auth login --help 2>/dev/null | grep -q -- --skip-ssh-key && skip=--skip-ssh-key
     # shellcheck disable=SC2086  # $skip is one flag or nothing
     gh auth login --hostname github.com --git-protocol ssh --web --scopes admin:public_key $skip <&3 ||
-      { gh_back "$previous"; fail "GitHub login failed"; return 1; }
+      { fail "GitHub login failed"; return 1; }
     login=$(gh_login)
+    gh_back "$previous"
     if [[ $login != "$OWNER" ]]; then
-      gh_back "$previous"
       fail "gh is logged in to GitHub as ${login:-nobody}, not $OWNER: log in as $OWNER (gh auth login), then run this again"
       return 1
     fi
+    fetch_setup || { fail "couldn't download the setup from the private dotfiles repo as $OWNER"; return 1; }
   fi
-  script=$(gh api "$PRIVATE" -H 'Accept: application/vnd.github.raw' 2>/dev/null)
-  status=$?
-  gh_back "$previous"
-  if ((status)) || [[ -z $script ]]; then
-    fail "couldn't download the setup from the private dotfiles repo as $OWNER"; return 1
-  fi
-  exec bash -c "$script" install.sh "$@"
+  exec bash -c "$SCRIPT" install.sh "$@"
 }
 
 main "$@"
